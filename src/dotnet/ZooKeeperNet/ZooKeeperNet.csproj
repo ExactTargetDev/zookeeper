@@ -118,7 +118,6 @@
     <Compile Include="Generated\SetWatches.cs" />
     <Compile Include="Generated\Stat.cs" />
     <Compile Include="Generated\StatPersisted.cs" />
-    <Compile Include="Generated\StatPersistedV1.cs" />
     <Compile Include="Generated\SyncRequest.cs" />
     <Compile Include="Generated\SyncResponse.cs" />
     <Compile Include="Generated\TxnHeader.cs" />
