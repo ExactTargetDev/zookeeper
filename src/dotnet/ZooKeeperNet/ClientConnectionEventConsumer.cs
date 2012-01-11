@@ -47,14 +47,33 @@
         {
             eventThread.Start();
         }
-
+        
         public void PollEvents()
         {
             try
             {
                 while (!waitingEvents.IsCompleted)
                 {
-                    object @event = waitingEvents.Take();
+                    object @event;
+                    try
+                    {
+                        @event = waitingEvents.Take();
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        if (waitingEvents.IsCompleted)
+                        {
+                            // the error is expected and will happen as we block on taking an item 
+                            // and while entrance condition may change in the meantime.
+                        }
+                        else
+                        {
+                            LOG.Error("Error while waiting for the next item. ", ex);
+                        }
+
+                        break;
+                    }
+
                     try
                     {
                         if (@event is ClientConnection.WatcherSetEventPair)
