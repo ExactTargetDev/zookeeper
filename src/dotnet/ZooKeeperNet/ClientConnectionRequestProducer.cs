@@ -61,6 +61,11 @@ namespace ZooKeeperNet
         internal int recvCount;
         internal int negotiatedSessionTimeout;
 
+        /// <summary>
+        /// Polling timeout in microseconds
+        /// </summary>
+        private const int PollingTimeout = 1000;
+
         public ClientConnectionRequestProducer(ClientConnection conn)
         {
             this.conn = conn;
@@ -112,8 +117,10 @@ namespace ZooKeeperNet
             DateTime now = DateTime.Now;
             DateTime lastHeard = now;
             DateTime lastSend = now;
+            int counter = 0;
             while (zooKeeper.State.IsAlive())
             {
+                LOG.Debug("Running main send request thread loop again " + (counter++));
                 try
                 {
                     if (client == null)
@@ -413,10 +420,11 @@ namespace ZooKeeperNet
 
         bool doIO(TimeSpan to)
         {
+            LOG.Debug("doIO (" + to.TotalMilliseconds + "ms)");
             bool packetReceived = false;
             if (client == null) throw new IOException("Socket is null!");
 
-            if (client.Client.Poll(Convert.ToInt32(to.TotalMilliseconds / 1000000), SelectMode.SelectRead))
+            if (client.Client.Poll(PollingTimeout, SelectMode.SelectRead))
             {
                 packetReceived = true;
                 int total = 0;
@@ -455,7 +463,8 @@ namespace ZooKeeperNet
                     incomingBuffer = new byte[4];
                 }
             }
-            else if (writeEnabled && client.Client.Poll(Convert.ToInt32(to.TotalMilliseconds / 1000000), SelectMode.SelectWrite))
+
+            if (writeEnabled && client.Client.Poll(PollingTimeout, SelectMode.SelectWrite))
             {
                 lock (outgoingQueueLock)
                 {
@@ -535,10 +544,6 @@ namespace ZooKeeperNet
                 if (replyHdr.Xid == -2)
                 {
                     // -2 is the xid for pings
-                    if (LOG.IsDebugEnabled)
-                    {
-                        LOG.Debug(string.Format("Got ping response for sessionid: 0x{0:X} after {1}ms", conn.SessionId, (DateTime.Now.Nanos() - lastPingSentNs)/1000000));
-                    }
                     return;
                 }
                 if (replyHdr.Xid == -4)
