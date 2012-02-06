@@ -320,8 +320,9 @@
                 {
                     // expected that
                 }
-                catch (KeeperException)
+                catch (KeeperException e)
                 {
+                    System.Diagnostics.Debug.WriteLine(e.ToString());
                     Assert.Fail("Should have gotten BadVersion exception");
                 }
                 LOG.Info("Before Delete /benwashere");
@@ -651,8 +652,18 @@
         public void testDeleteWithChildren()
         {
             ZooKeeper zk = CreateClient();
+            try
+            {
+                zk.Delete("/parent/child", -1);
+                zk.Delete("/parent", -1);
+            }
+            catch
+            {
+                //Swallow
+            }
             zk.Create("/parent", new byte[0], Ids.OPEN_ACL_UNSAFE, CreateMode.Persistent);
             zk.Create("/parent/child", new byte[0], Ids.OPEN_ACL_UNSAFE, CreateMode.Persistent);
+            
             try
             {
                 zk.Delete("/parent", -1);
