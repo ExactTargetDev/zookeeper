@@ -554,16 +554,16 @@ namespace ZooKeeperNet
                 {
                     _lastSend = DateTime.UtcNow;
                     Packet first = outgoingQueue.First.Value;
-                    var e = _writerPool.Pop();
-                    e.UserToken = first;
-                    e.SetBuffer(first.data,0,first.data.Length);
-                    client.Client.SendAsync(e);
-                    sentCount++;
                     if (first.header != null && first.header.Type != (int)OpCode.Ping &&
                         first.header.Type != (int)OpCode.Auth)
                     {
                         pendingQueue.AddLast(first);
                     }
+                    var e = _writerPool.Pop();
+                    e.UserToken = first;
+                    e.SetBuffer(first.data,0,first.data.Length);
+                    client.Client.SendAsync(e);
+                    sentCount++;
                 }
             }
         }
@@ -662,9 +662,8 @@ namespace ZooKeeperNet
             }
             _lastHeard = DateTime.UtcNow;
 
-            if (!client.Client.ReceiveAsync(e))
+            if (ClientIsReady() && !client.Client.ReceiveAsync(e))
                 ProcessRead(e);
-            TryWrite();
         }
         private void CloseClientSocket(SocketAsyncEventArgs e)
         {
