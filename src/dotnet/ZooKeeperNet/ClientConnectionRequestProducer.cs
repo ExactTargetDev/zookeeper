@@ -135,8 +135,11 @@ namespace ZooKeeperNet
 
         }
 
+        private ManualResetEventSlim _shutdownHandle = new ManualResetEventSlim();
         private DateTime _lastHeard;
+        private DateTime _lastSend;
         private SocketAsyncEventArgsPool _readerPool = new SocketAsyncEventArgsPool(1);
+        private SocketAsyncEventArgsPool _writerPool = new SocketAsyncEventArgsPool(5);
         private static readonly ILog LOG = LogManager.GetLogger(typeof(ClientConnectionRequestProducer));
         private const string RETRY_CONN_MSG = ", closing socket connection and attempting reconnect";
 
@@ -215,7 +218,7 @@ namespace ZooKeeperNet
                     ConLossPacket(p);
                 else
                 outgoingQueue.AddLast(p);
-
+                EnableWrite();
             return p;
             }
         }
@@ -226,17 +229,23 @@ namespace ZooKeeperNet
 
             readWriteEventArgs = new SocketAsyncEventArgs();
             readWriteEventArgs.Completed += SendReceiveCompleted;
-            readWriteEventArgs.UserToken = Guid.NewGuid();
             readWriteEventArgs.SetBuffer(new byte[4],0,4);
 
             _readerPool.Push(readWriteEventArgs);
+
+            foreach(var i in (Enumerable.Range(0,5)))
+            {
+                readWriteEventArgs = new SocketAsyncEventArgs();
+                readWriteEventArgs.Completed += SendReceiveCompleted;
+                _writerPool.Push(readWriteEventArgs);
+            }
             
         }
         public void SendRequests()
         {
             DateTime now = DateTime.UtcNow;
             _lastHeard = now;
-            DateTime lastSend = now;
+            _lastSend = now;
             int counter = 0;
             InitAsyncConnections();
             while (zooKeeper.State.IsAlive())
@@ -252,11 +261,11 @@ namespace ZooKeeperNet
                             break;
                         }
                         StartConnect();
-                        lastSend = now;
+                        _lastSend = now;
                         _lastHeard = now;
                     }   
                     TimeSpan idleRecv = now - _lastHeard;
-                    TimeSpan idleSend = now - lastSend;
+                    TimeSpan idleSend = now - _lastSend;
                     TimeSpan to = conn.readTimeout - idleRecv;
                     if (zooKeeper.State != ZooKeeper.States.CONNECTED)
                     {
@@ -273,7 +282,7 @@ namespace ZooKeeperNet
                         if (timeToNextPing <= TimeSpan.Zero)
                         {
                             SendPing();
-                            lastSend = now;
+                            _lastSend = now;
                             EnableWrite();
                         }
                         else
@@ -288,32 +297,14 @@ namespace ZooKeeperNet
                     // Everything below and until we get back to the select is
                     // non blocking, so time is effectively a constant. That is
                     // Why we just have to do this once, here
-                    now = DateTime.UtcNow;
+                    
     
-                    if (outgoingQueue.Count > 0)
-                    {
-                        // We have something to send so it's the same
-                        // as if we do the send now.
-                        lastSend = now;
-                    }
-                    if (doIO(to))
-                    {
-                        _lastHeard = now;
-                    }
-                    if (zooKeeper.State == ZooKeeper.States.CONNECTED)
-                    {
-                        if (outgoingQueue.Count > 0)
-                        {
-                            EnableWrite();
-                        }
-                        else
-                        {
-                            DisableWrite();
-                        }
-                    }
+                    _shutdownHandle.Wait((int)(conn.connectTimeout.TotalMilliseconds / 3));
+
                 }
                 catch (Exception e)
                 {
+                    _shutdownHandle.Set();
                     if (conn.closing)
                     {
                         if (LOG.IsDebugEnabled)
@@ -321,7 +312,7 @@ namespace ZooKeeperNet
                             // closing so this is expected
                             LOG.Debug(string.Format("An exception was thrown while closing send thread for session 0x{0:X} : {1}", conn.SessionId, e.Message));
                         }
-                        break;
+                        //break;
                     }
                     // this is ugly, you have a better way speak up
                     if (e is KeeperException.SessionExpiredException)
@@ -350,7 +341,7 @@ namespace ZooKeeperNet
     
                     now = DateTime.UtcNow;
                     _lastHeard = now;
-                    lastSend = now;
+                    _lastSend = now;
                     client = null;
                 }
             }
@@ -578,6 +569,7 @@ namespace ZooKeeperNet
             RequestHeader h = new RequestHeader(-2,
             (int)OpCode.Ping);
             conn.QueuePacket(h, null, null, null, null, null, null, null, null);
+            WriteAsync();
         }
 
         private bool doIO(TimeSpan to)
@@ -602,12 +594,79 @@ namespace ZooKeeperNet
                 ProcessRead(e);
         }
 
+        private void WriteAsync()
+        {
+            lock (outgoingQueueLock)
+            {
+                if (ClientIsReady() && !outgoingQueue.IsEmpty())
+                {
+                    _lastSend = DateTime.UtcNow;
+                    Packet first = outgoingQueue.First.Value;
+                    var e = _writerPool.Pop();
+                    e.UserToken = first;
+                    e.SetBuffer(first.data,0,first.data.Length);
+                    client.Client.SendAsync(e);
+                    sentCount++;
+                }
+            }
+        }
+
+        private bool ClientIsReady()
+        {
+            return client != null && client.Client != null && client.Client.Connected;
+        }
+
         private void SendReceiveCompleted(object sender, SocketAsyncEventArgs e)
         {
             if(e.LastOperation == SocketAsyncOperation.Receive)
                 ProcessRead(e);
+            else if(e.LastOperation == SocketAsyncOperation.Send)
+                ProcessWrite(e);
             else
                 CloseClientSocket(e);
+        }
+
+        private void ProcessWrite(SocketAsyncEventArgs e)
+        {
+            if (e.SocketError == SocketError.Success)
+            {
+                Packet first = (Packet)e.UserToken;
+                if(!outgoingQueue.IsEmpty() && outgoingQueue.First() == first)
+                {
+                    lock(outgoingQueueLock)
+                    {
+                        if(!outgoingQueue.IsEmpty() && outgoingQueue.First() == first)
+                            outgoingQueue.RemoveFirst();
+                    }
+                }
+                
+                if (first.header != null && first.header.Type != (int)OpCode.Ping &&
+                first.header.Type != (int)OpCode.Auth)
+                {
+                    pendingQueue.AddLast(first);
+                }
+                if (outgoingQueue.IsEmpty())
+                {
+                    DisableWrite();
+                }
+                else
+                {
+                    EnableWrite();
+                }
+            }
+            else
+            {
+                lock(outgoingQueueLock)
+                {
+                    if(e.UserToken != null)
+                    {
+                        outgoingQueue.AddFirst((Packet)e.UserToken);
+                    }
+                }
+                CloseClientSocket(e);
+            }
+            _writerPool.Push(e);
+            WriteAsync();
         }
 
         private void ProcessRead(SocketAsyncEventArgs e)
@@ -617,36 +676,43 @@ namespace ZooKeeperNet
                 var buffer = new byte[e.BytesTransferred];
                 Array.Copy(e.Buffer,e.Offset,buffer,0,e.BytesTransferred);
 
-                if(lenBuffer == null)
-                {
-                    recvCount++;
-                    var newBuffer = GetLength(buffer);
-                    e.SetBuffer(newBuffer, 0, newBuffer.Length);                    
-                }
-                else if(!initialized)
-                {
-                    ReadConnectResult(buffer);
-                    if (!outgoingQueue.IsEmpty()) EnableWrite();
-                    lenBuffer = null;
-                    e.SetBuffer(new byte[4],0,4);
-                    initialized = true;
-                }
+                if(e.Buffer.Length > e.BytesTransferred)
+                    client.Client.ReceiveAsync(e);
                 else
-                {
-                    ReadResponse(buffer);
-                    lenBuffer = null;
-                    e.SetBuffer(new byte[4],0,4);
-                }
-                _lastHeard = DateTime.UtcNow;
-                
-                if(!client.Client.ReceiveAsync(e))
-                    ProcessRead(e);
-                TryWrite();
+                     DoRead(e, buffer);
             }
             else
             {
                 CloseClientSocket(e);
             }
+        }
+        private void DoRead(SocketAsyncEventArgs e, byte[] buffer)
+        {
+            if (lenBuffer == null)
+            {
+                recvCount++;
+                var newBuffer = GetLength(buffer);
+                e.SetBuffer(newBuffer, 0, newBuffer.Length);
+            }
+            else if (!initialized)
+            {
+                ReadConnectResult(buffer);
+                if (!outgoingQueue.IsEmpty()) EnableWrite();
+                lenBuffer = null;
+                e.SetBuffer(new byte[4], 0, 4);
+                initialized = true;
+            }
+            else
+            {
+                ReadResponse(buffer);
+                lenBuffer = null;
+                e.SetBuffer(new byte[4], 0, 4);
+            }
+            _lastHeard = DateTime.UtcNow;
+
+            if (!client.Client.ReceiveAsync(e))
+                ProcessRead(e);
+            TryWrite();
         }
         private void CloseClientSocket(SocketAsyncEventArgs e)
         {
@@ -904,6 +970,7 @@ namespace ZooKeeperNet
         public void EnableWrite()
         {
             writeEnabled = true;
+            WriteAsync();
         }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
@@ -941,6 +1008,8 @@ namespace ZooKeeperNet
         public void Dispose()
         {
             zooKeeper.State = ZooKeeper.States.CLOSED;
+            _shutdownHandle.Set();
+            _shutdownHandle.Dispose();
             requestThread.Join();
         }
     }
