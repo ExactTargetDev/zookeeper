@@ -23,8 +23,19 @@ namespace ZooKeeperNet
 
     public class SafeThreadStart
     {
+        public class ExceptionEventArgs : EventArgs
+        {
+            public Exception Exception;
+            public ExceptionEventArgs(Exception e)
+            {
+                Exception = e;
+            }
+        }
+
         private readonly Action action;
         private static readonly ILog LOG = LogManager.GetLogger(typeof(SafeThreadStart));
+
+        public EventHandler<ExceptionEventArgs> OnUnhandledException;
 
         public SafeThreadStart(Action action)
         {
@@ -40,6 +51,10 @@ namespace ZooKeeperNet
             catch (Exception e)
             {
                 LOG.Error("Unhandled exception in background thread", e);
+                if(OnUnhandledException != null)
+                {
+                    OnUnhandledException(this,new ExceptionEventArgs(e));
+                }
             }            
         }
     }
