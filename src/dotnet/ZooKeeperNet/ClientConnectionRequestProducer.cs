@@ -559,6 +559,11 @@ namespace ZooKeeperNet
                     e.SetBuffer(first.data,0,first.data.Length);
                     client.Client.SendAsync(e);
                     sentCount++;
+                    if (first.header != null && first.header.Type != (int)OpCode.Ping &&
+                        first.header.Type != (int)OpCode.Auth)
+                    {
+                        pendingQueue.AddLast(first);
+                    }
                 }
             }
         }
@@ -592,11 +597,6 @@ namespace ZooKeeperNet
                     }
                 }
                 
-                if (first.header != null && first.header.Type != (int)OpCode.Ping &&
-                first.header.Type != (int)OpCode.Auth)
-                {
-                    pendingQueue.AddLast(first);
-                }
                 _writerPool.Push(e);
                 if (outgoingQueue.IsEmpty())
                 {
@@ -671,50 +671,6 @@ namespace ZooKeeperNet
             _readerPool.Push(e);
         }
 
-        private bool TryRead()
-        {
-            if (client.Client.Poll(PollingTimeout, SelectMode.SelectRead))
-            {
-                int total = 0;
-                int current = total = client.GetStream().Read(incomingBuffer, total, incomingBuffer.Length - total);
-
-                while (total < incomingBuffer.Length && current > 0)
-                {
-                    current = client.GetStream().Read(incomingBuffer, total, incomingBuffer.Length - total);
-                    total += current;
-                }
-
-                if (current <= 0)
-                {
-                    throw new EndOfStreamException(string.Format("Unable to read additional data from server sessionid 0x{0:X}, likely server has closed socket",
-                    conn.SessionId));
-                }
-
-                if (lenBuffer == null)
-                {
-                    lenBuffer = incomingBuffer;
-                    recvCount++;
-                    ReadLength();
-                }
-                else
-                if (!initialized)
-                {
-                    ReadConnectResult(incomingBuffer);
-                    if (!outgoingQueue.IsEmpty()) EnableWrite();
-                    lenBuffer = null;
-                    incomingBuffer = new byte[4];
-                    initialized = true;
-                }
-                else
-                {
-                    ReadResponse(incomingBuffer);
-                    lenBuffer = null;
-                    incomingBuffer = new byte[4];
-                }
-                return true;
-            }
-            return false;
-        }
         private void TryWrite()
         {
             if (writeEnabled && client.Client.Poll(PollingTimeout, SelectMode.SelectWrite))
@@ -760,21 +716,7 @@ namespace ZooKeeperNet
                 return new byte[len];
             }
         }
-        private void ReadLength()
-        {
-            lenBuffer = new byte[4];
-            using (EndianBinaryReader reader = new EndianBinaryReader(EndianBitConverter.Big,
-            new MemoryStream(incomingBuffer),
-            Encoding.UTF8))
-            {
-                int len = reader.ReadInt32();
-                if (len < 0 || len >= ClientConnection.packetLen)
-                {
-                    throw new IOException("Packet len " + len + " is out of range!");
-                }
-                incomingBuffer = new byte[len];
-            }
-        }
+      
 
         private void ReadConnectResult(byte[] incomingBuffer)
         {
