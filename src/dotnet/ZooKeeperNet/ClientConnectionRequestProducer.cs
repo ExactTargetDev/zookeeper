@@ -598,7 +598,7 @@ namespace ZooKeeperNet
                 lock (pendingQueueLock)
                 {
                     packet = pendingQueue.First.Value;
-                    System.Diagnostics.Debug.WriteLine("Received Packet:"+ packet.ToString());
+                    System.Diagnostics.Debug.WriteLine("Received Packet:"+packet.GetHashCode()+" "+ packet.ToString());
                     pendingQueue.RemoveFirst();
                 }
                 /*
@@ -670,7 +670,7 @@ namespace ZooKeeperNet
             {
                 p.watchRegistration.Register(p.replyHeader.Err);
             }
-            System.Diagnostics.Debug.WriteLine("Finishing Packet: "+p.ToString());
+            System.Diagnostics.Debug.WriteLine("Finishing Packet: "+p.GetHashCode()+" "+p.ToString());
             p.Finished = true;
             conn.consumer.QueuePacket(p);
         }
