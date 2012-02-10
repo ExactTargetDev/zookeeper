@@ -662,8 +662,6 @@ namespace ZooKeeperNet
 
         private void ReadConnectResult(byte[] incomingBuffer)
         {
-            string[] byteString = incomingBuffer.Select(b => b.ToString("X2")).ToArray();
-            System.Diagnostics.Debug.WriteLine(string.Format("Reading Connect Result: {0}", string.Join(" ", byteString)));
             using (var reader = new EndianBinaryReader(EndianBitConverter.Big,new MemoryStream(incomingBuffer),Encoding.UTF8))
             {
                 BinaryInputArchive bbia = BinaryInputArchive.GetArchive(reader);
@@ -688,8 +686,6 @@ namespace ZooKeeperNet
 
         private void ReadResponse(byte[] incomingBuffer)
         {
-            string[] byteString = incomingBuffer.Select(b => b.ToString("X2")).ToArray();
-            System.Diagnostics.Debug.WriteLine(string.Format("Reading Response: {0}", string.Join(" ", byteString)));
             using (MemoryStream ms = new MemoryStream(incomingBuffer))
             using (var reader = new EndianBinaryReader(EndianBitConverter.Big,ms,Encoding.UTF8))
             {
@@ -749,7 +745,7 @@ namespace ZooKeeperNet
                 lock (pendingQueueLock)
                 {
                     packet = pendingQueue.First.Value;
-                    System.Diagnostics.Debug.WriteLine("Received packet: "+packet.ToString());
+                    System.Diagnostics.Debug.WriteLine("Received packet: "+packet.GetHashCode()+" "+packet.ToString());
                     pendingQueue.RemoveFirst();
                 }
                     /*
@@ -822,7 +818,7 @@ namespace ZooKeeperNet
             {
                 p.watchRegistration.Register(p.replyHeader.Err);
             }
-
+            System.Diagnostics.Debug.WriteLine("Finishing Packet: " + p.GetHashCode() + " " + p.ToString());
             p.Finished = true;
             conn.consumer.QueuePacket(p);
         }
