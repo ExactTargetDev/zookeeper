@@ -586,13 +586,23 @@ namespace ZooKeeperNet
         {
             if(e.BytesTransferred > 0 && e.SocketError == SocketError.Success)
             {
-                var buffer = new byte[e.BytesTransferred];
-                Array.Copy(e.Buffer, e.Offset, buffer, 0, e.BytesTransferred);
+                var buffer = new byte[e.Offset + e.BytesTransferred];
+                Array.Copy(e.Buffer, 0, buffer, 0, e.BytesTransferred);
 
-                if(e.Buffer.Length > e.BytesTransferred)
+                if(e.Buffer.Length > e.Offset + e.BytesTransferred)
                 {
-                    if(!client.Client.ReceiveAsync(e))
-                        ProcessRead(e);
+                    //e.SetBuffer(e.BytesTransferred,e.Buffer.Length - e.BytesTransferred);
+                    //if(!client.Client.ReceiveAsync(e))
+                    //    ProcessRead(e);
+                    int current = e.BytesTransferred;
+                    int total = e.BytesTransferred;
+
+                    while (total < e.Buffer.Length && current > 0)
+                    {
+                        current = client.GetStream().Read(e.Buffer, total, e.Buffer.Length - total);
+                        total += current;
+                    }
+                    DoRead(e,e.Buffer);
                 }
                 else
                 {
