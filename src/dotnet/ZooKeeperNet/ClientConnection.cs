@@ -211,7 +211,7 @@
                 while (!p.Finished)
                 {
                     if (!Monitor.Wait(p, SessionTimeout))
-                        throw new TimeoutException(string.Format("The request {0} timed out while waiting for a resposne from the server.", request));
+                        throw new TimeoutException(string.Format("The request {0} timed out while waiting for a response from the server.", request));
                 }
             }
             return r;
