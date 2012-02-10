@@ -670,7 +670,7 @@ namespace ZooKeeperNet
             {
                 p.watchRegistration.Register(p.replyHeader.Err);
             }
-
+            System.Diagnostics.Debug.WriteLine("Finishing Packet: "+p.ToString());
             p.Finished = true;
             conn.consumer.QueuePacket(p);
         }
