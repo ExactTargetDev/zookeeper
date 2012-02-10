@@ -550,6 +550,7 @@ namespace ZooKeeperNet
             if (e.SocketError == SocketError.Success)
             {
                 Packet first = (Packet)e.UserToken;
+                System.Diagnostics.Debug.WriteLine("Wrote packet: "+first.ToString());
                 if(!outgoingQueue.IsEmpty())
                 {
                     lock(outgoingQueueLock)
@@ -611,11 +612,13 @@ namespace ZooKeeperNet
             {
                 recvCount++;
                 var newBuffer = GetLength(buffer);
+                System.Diagnostics.Debug.WriteLine("Received Length Packet: "+newBuffer.Length);
                 e.SetBuffer(newBuffer, 0, newBuffer.Length);
             }
             else if (!initialized)
             {                
                 ReadConnectResult(buffer);
+                System.Diagnostics.Debug.WriteLine("Received Connection Packet");
                 if (!outgoingQueue.IsEmpty()) EnableWrite();
                 lenBuffer = null;
                 initialized = true;
@@ -625,7 +628,6 @@ namespace ZooKeeperNet
             {
                 lenBuffer = null;
                 e.SetBuffer(new byte[4], 0, 4);
-                PrepareForNextRead(e);
                 ReadResponse(buffer);                
             }
             PrepareForNextRead(e);
@@ -747,6 +749,7 @@ namespace ZooKeeperNet
                 lock (pendingQueueLock)
                 {
                     packet = pendingQueue.First.Value;
+                    System.Diagnostics.Debug.WriteLine("Received packet: "+packet.ToString());
                     pendingQueue.RemoveFirst();
                 }
                     /*
