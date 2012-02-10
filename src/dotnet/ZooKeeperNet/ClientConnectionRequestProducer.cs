@@ -378,7 +378,8 @@ namespace ZooKeeperNet
                 boa.WriteInt(-1, "len");
                 conReq.Serialize(boa, "connect");
                 ms.Position = 0;
-                writer.Write(ms.ToArray().Length - 4);                buffer = ms.ToArray();
+                writer.Write(ms.ToArray().Length - 4);
+                buffer = ms.ToArray();
             }
             lock (outgoingQueueLock)
             {
@@ -447,6 +448,7 @@ namespace ZooKeeperNet
                     lenBuffer = incomingBuffer;
                     recvCount++;
                     ReadLength();
+                    System.Diagnostics.Debug.WriteLine("Received Length Packet:"+incomingBuffer.Length);
                 }
                 else if (!initialized)
                 {
@@ -455,6 +457,7 @@ namespace ZooKeeperNet
                     lenBuffer = null;
                     incomingBuffer = new byte[4];
                     initialized = true;
+                    System.Diagnostics.Debug.WriteLine("Received Connection Result");
                 }
                 else
                 {
@@ -471,6 +474,7 @@ namespace ZooKeeperNet
                     if (!outgoingQueue.IsEmpty())
                     {
                         Packet first = outgoingQueue.First.Value;
+                        System.Diagnostics.Debug.WriteLine("Writing Packet:"+first.ToString());
                         client.GetStream().Write(first.data, 0, first.data.Length);
                         sentCount++;
                         outgoingQueue.RemoveFirst();
@@ -594,6 +598,7 @@ namespace ZooKeeperNet
                 lock (pendingQueueLock)
                 {
                     packet = pendingQueue.First.Value;
+                    System.Diagnostics.Debug.WriteLine("Received Packet:"+ packet.ToString());
                     pendingQueue.RemoveFirst();
                 }
                 /*
