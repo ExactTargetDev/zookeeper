@@ -34,6 +34,47 @@ namespace ZooKeeperNet
 
     public class ClientConnectionRequestProducer : IStartable, IDisposable
     {
+
+        private class PacketReadState
+        {
+            public int? Length { get; set; }
+            public byte[] Buffer { get; set; }
+
+            public bool HaveLength
+            {
+                get { return Length != null; }
+            }
+
+            public int BytesWritten { get; set; }
+
+            public PacketReadState()
+            {
+                Buffer = new byte[4];
+            }
+
+            public void ProcessLength(SocketAsyncEventArgs e)
+            {
+                using (EndianBinaryReader reader = new EndianBinaryReader(EndianBitConverter.Big,new MemoryStream(Buffer),Encoding.UTF8))
+                {
+                    int len = reader.ReadInt32();
+                    if (len < 0 || len >= ClientConnection.packetLen)
+                    {
+                        throw new IOException("Packet len " + len + " is out of range!");
+                    }
+                    Buffer = new byte[len];
+                    Length = len;
+                }
+                e.SetBuffer(Buffer, 0, Length.Value);
+            }
+
+            public void PacketProcessed(SocketAsyncEventArgs e)
+            {
+                Length = null;
+                Buffer = new byte[4];
+                e.SetBuffer(Buffer, 0, 4);
+            }
+        }
+
         private class SocketAsyncEventArgsPool
         {
             private readonly Stack<SocketAsyncEventArgs> _pool;
@@ -87,11 +128,11 @@ namespace ZooKeeperNet
             }
         }
 
-        private ManualResetEventSlim _shutdownHandle = new ManualResetEventSlim();
+        private readonly ManualResetEventSlim _shutdownHandle = new ManualResetEventSlim();
         private DateTime _lastHeard;
         private DateTime _lastSend;
-        private SocketAsyncEventArgsPool _readerPool = new SocketAsyncEventArgsPool(1);
-        private SocketAsyncEventArgsPool _writerPool = new SocketAsyncEventArgsPool(5);
+        private readonly SocketAsyncEventArgsPool _readerPool = new SocketAsyncEventArgsPool(1);
+        private readonly SocketAsyncEventArgsPool _writerPool = new SocketAsyncEventArgsPool(5);
         private static readonly ILog LOG = LogManager.GetLogger(typeof(ClientConnectionRequestProducer));
         private const string RETRY_CONN_MSG = ", closing socket connection and attempting reconnect";
 
@@ -114,8 +155,6 @@ namespace ZooKeeperNet
         //private long lastPingSentNs;
         internal int xid = 1;
 
-        private byte[] lenBuffer;
-        private byte[] incomingBuffer = new byte[4];
         internal int sentCount;
         internal int recvCount;
         internal int negotiatedSessionTimeout;
@@ -134,7 +173,6 @@ namespace ZooKeeperNet
             {
                 _shutdownHandle.Set();
                 requestThread.Join();
-                requestThread.Start();
             };
             requestThread = new Thread(threadStart.Run)
             { Name = "ZK-SendThread" + conn.zooKeeper.Id,
@@ -190,6 +228,7 @@ namespace ZooKeeperNet
                 readWriteEventArgs = new SocketAsyncEventArgs();
                 readWriteEventArgs.Completed += SendReceiveCompleted;
                 readWriteEventArgs.SetBuffer(new byte[4], 0, 4);
+                readWriteEventArgs.UserToken = new PacketReadState();
                 _readerPool.Push(readWriteEventArgs);
             }
 
@@ -489,10 +528,7 @@ namespace ZooKeeperNet
         private void ReadAsync()
         {
             var e = _readerPool.Pop();
-            if(lenBuffer == null)
-            {
-                e.SetBuffer(new byte[4],0,4);
-            }
+            
             if(!client.Client.ReceiveAsync(e))
                 ProcessRead(e);
         }
@@ -526,7 +562,7 @@ namespace ZooKeeperNet
                 if(!client.Client.SendAsync(e))
                     ProcessWrite(e);
 
-                sentCount++;
+                Interlocked.Increment(ref sentCount);
             }
         }
 
@@ -586,27 +622,29 @@ namespace ZooKeeperNet
         {
             if(e.BytesTransferred > 0 && e.SocketError == SocketError.Success)
             {
-                var buffer = new byte[e.Offset + e.BytesTransferred];
-                Array.Copy(e.Buffer, 0, buffer, 0, e.BytesTransferred);
+                var state = (e.UserToken as PacketReadState) ?? new PacketReadState();
+                e.UserToken = state;
 
-                if(e.Buffer.Length > e.Offset + e.BytesTransferred)
+                if(!state.HaveLength || (state.HaveLength && state.Length == e.BytesTransferred))
                 {
-                    //e.SetBuffer(e.BytesTransferred,e.Buffer.Length - e.BytesTransferred);
-                    //if(!client.Client.ReceiveAsync(e))
-                    //    ProcessRead(e);
-                    int current = e.BytesTransferred;
-                    int total = e.BytesTransferred;
-
-                    while (total < e.Buffer.Length && current > 0)
-                    {
-                        current = client.GetStream().Read(e.Buffer, total, e.Buffer.Length - total);
-                        total += current;
-                    }
-                    DoRead(e,e.Buffer);
+                    Array.Copy(e.Buffer, 0, state.Buffer, 0, e.BytesTransferred);
+                    DoRead(e,state);
                 }
                 else
                 {
-                    DoRead(e, buffer);
+                    Array.Copy(e.Buffer,e.Offset,state.Buffer,state.BytesWritten,e.BytesTransferred);
+                    state.BytesWritten = state.BytesWritten + e.BytesTransferred;
+                    if(state.BytesWritten == state.Length)
+                    {
+                        DoRead(e,state);
+                    }
+                    else
+                    {
+                        var bytesLeft = state.Length.Value - state.BytesWritten;
+                        e.SetBuffer(new byte[bytesLeft],0,bytesLeft);
+                        if(!client.Client.ReceiveAsync(e))
+                            ProcessRead(e);
+                    }
                 }
             }
             else
@@ -615,30 +653,27 @@ namespace ZooKeeperNet
             }
         }
 
-        private void DoRead(SocketAsyncEventArgs e, byte[] buffer)
+        private void DoRead(SocketAsyncEventArgs e, PacketReadState state)
         {
             _lastHeard = DateTime.UtcNow;
-            if (lenBuffer == null)
+            if (state.Length == null)
             {
-                recvCount++;
-                var newBuffer = GetLength(buffer);
-                System.Diagnostics.Debug.WriteLine("Received Length Packet: "+newBuffer.Length);
-                e.SetBuffer(newBuffer, 0, newBuffer.Length);
+                Interlocked.Increment(ref recvCount);
+                state.ProcessLength(e);
+                System.Diagnostics.Debug.WriteLine("Received Length Packet: "+state.Length);
             }
             else if (!initialized)
             {                
-                ReadConnectResult(buffer);
+                ReadConnectResult(state.Buffer);
                 System.Diagnostics.Debug.WriteLine("Received Connection Packet");
                 if (!outgoingQueue.IsEmpty()) EnableWrite();
-                lenBuffer = null;
-                initialized = true;
-                e.SetBuffer(new byte[4], 0, 4);                
+                state.PacketProcessed(e);              
+                initialized = true;                
             }
             else
             {
-                lenBuffer = null;
-                e.SetBuffer(new byte[4], 0, 4);
-                ReadResponse(buffer);                
+                ReadResponse(state.Buffer);
+                state.PacketProcessed(e);                          
             }
             PrepareForNextRead(e);
         }
@@ -652,22 +687,6 @@ namespace ZooKeeperNet
         {
             _readerPool.Push(e);
             _shutdownHandle.Set();
-        }
-
-        private byte[] GetLength(byte[] buffer)
-        {
-            lenBuffer = new byte[4];
-            using (EndianBinaryReader reader = new EndianBinaryReader(EndianBitConverter.Big,
-            new MemoryStream(buffer),
-            Encoding.UTF8))
-            {
-                int len = reader.ReadInt32();
-                if (len < 0 || len >= ClientConnection.packetLen)
-                {
-                    throw new IOException("Packet len " + len + " is out of range!");
-                }
-                return new byte[len];
-            }
         }
 
         private void ReadConnectResult(byte[] incomingBuffer)
@@ -838,6 +857,8 @@ namespace ZooKeeperNet
             zooKeeper.State = ZooKeeper.States.CLOSED;
             _shutdownHandle.Set();
             _shutdownHandle.Dispose();
+            if(client != null)
+                ((IDisposable)client).Dispose();
             requestThread.Join();
         }
     }
