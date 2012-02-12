@@ -70,6 +70,7 @@ namespace ZooKeeperNet
             public void PacketProcessed(SocketAsyncEventArgs e)
             {
                 Length = null;
+                BytesWritten = 0;
                 Buffer = new byte[4];
                 e.SetBuffer(Buffer, 0, 4);
             }
@@ -354,7 +355,10 @@ namespace ZooKeeperNet
             {
                 try
                 {
-                    client.Client.Close();
+                    if(client.Client != null)
+                    {
+                        client.Client.Close();
+                    }
                     client.Close();
                 }
                 catch (IOException e)
@@ -632,7 +636,7 @@ namespace ZooKeeperNet
                 }
                 else
                 {
-                    Array.Copy(e.Buffer,e.Offset,state.Buffer,state.BytesWritten,e.BytesTransferred);
+                    Array.Copy(e.Buffer,e.Offset,state.Buffer,state.BytesWritten,Math.Min(e.BytesTransferred,(int)(state.Length - state.BytesWritten)));
                     state.BytesWritten = state.BytesWritten + e.BytesTransferred;
                     if(state.BytesWritten == state.Length)
                     {
