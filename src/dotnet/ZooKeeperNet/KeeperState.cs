@@ -23,6 +23,7 @@
         Disconnected = 0,
         NoSyncConnected = 1,
         SyncConnected = 3,
-        Expired = -112
+        Expired = -112,
+        AuthFailed = -113
     }
 }

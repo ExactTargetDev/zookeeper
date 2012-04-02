@@ -322,6 +322,10 @@ namespace ZooKeeperNet
                     {
                         LOG.Info(e.Message + RETRY_CONN_MSG);
                     }
+                    else if (e is AuthFailedException)
+                    {
+                        LOG.Info(e.Message + ", closing session");
+                    }
                     else if (e is System.IO.EndOfStreamException)
                     {
                         LOG.Info(e.Message + RETRY_CONN_MSG);
@@ -739,7 +743,11 @@ namespace ZooKeeperNet
                     {
                         LOG.Debug(string.Format("Got auth sessionid:0x{0:X}", conn.SessionId));
                     }
-                    return;
+                    if (replyHdr.Err == 0)
+                        return;
+                    zooKeeper.State = ZooKeeper.States.AUTH_FAILED;
+                    conn.consumer.QueueEvent(new WatchedEvent(KeeperState.AuthFailed, EventType.None, null));
+                    throw new AuthFailedException(string.Format("Unable to authanticate for session 0x{0:X}", conn.SessionId));
                 }
                 if (replyHdr.Xid == -1)
                 {
