@@ -173,7 +173,7 @@ namespace ZooKeeperNet
             threadStart.OnUnhandledException += (t, e) =>
             {
                 _shutdownHandle.Set();
-                requestThread.Join();
+                requestThread.Join(conn.readTimeout);
             };
             requestThread = new Thread(threadStart.Run)
             { Name = "ZK-SendThread" + conn.zooKeeper.Id,
@@ -871,7 +871,7 @@ namespace ZooKeeperNet
             _shutdownHandle.Dispose();
             if(client != null)
                 ((IDisposable)client).Dispose();
-            requestThread.Join();
+            requestThread.Join(conn.readTimeout);
         }
     }
 }
